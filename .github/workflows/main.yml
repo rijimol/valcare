@@ -2,7 +2,7 @@ name: Roll up effort to parent issues
 
 on:
   schedule:
-    - cron: "*/1 * * * *"   # field edits don't trigger workflows, so poll
+    - cron: "*/5 * * * *"   # field edits don't trigger workflows, so poll
   workflow_dispatch:
   issues:
     types: [opened, edited, closed, reopened, deleted, transferred]
