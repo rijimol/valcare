@@ -18,7 +18,7 @@ jobs:
           PROJECT_NUMBER: "4"
           FIELD_NAME: Effort
         with:
-          github-token: ${{ secrets.valcare }}
+          github-token: ${{ secrets.VALCARE }}
           script: |
             const { OWNER, OWNER_TYPE, PROJECT_NUMBER, FIELD_NAME } = process.env;
 
