@@ -20,7 +20,7 @@ jobs:
         uses: actions/github-script@v7
 
         with:
-          github-token: $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
+          github-token: $valcare
 
           script: |
             const owner = 'rijimol';
