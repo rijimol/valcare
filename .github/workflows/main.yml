@@ -18,7 +18,7 @@ jobs:
           PROJECT_NUMBER: "4"
           FIELD_NAME: Effort
         with:
-          github-token: $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
+          github-token: $valcare
           script: |
             const { OWNER, OWNER_TYPE, PROJECT_NUMBER, FIELD_NAME } = process.env;
 
