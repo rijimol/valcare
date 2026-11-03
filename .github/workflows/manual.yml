@@ -1,0 +1,271 @@
+
+name: Update Parent Story Estimate
+
+on:
+  issues:
+    types: [opened, edited, closed, reopened]
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-estimate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Calculate parent story estimates
+        uses: actions/github-script@v7
+
+        with:
+          github-token: $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
+
+          script: |
+            const owner = 'rijimol';
+            const projectNumber = 4;
+
+            // IMPORTANT:
+            // Change this to the exact visible name
+            // of your renamed Estimate field.
+            const effortFieldName = 'Effort';
+
+            const graphql = github.graphql.defaults({
+              headers: {
+                'GraphQL-Features': 'sub_issues'
+              }
+            });
+
+            const query = `
+              query($after: String) {
+                user(login: "${owner}") {
+                  projectV2(number: ${projectNumber}) {
+                    id
+
+                    fields(first: 100) {
+                      nodes {
+                        ... on ProjectV2Field {
+                          id
+                          name
+                          dataType
+                        }
+                      }
+                    }
+
+                    items(first: 100, after: $after) {
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
+
+                      nodes {
+                        id
+
+                        content {
+                          __typename
+
+                          ... on Issue {
+                            id
+                            number
+                            title
+
+                            subIssues(first: 100) {
+                              nodes {
+                                id
+                                number
+                                title
+                              }
+                            }
+                          }
+                        }
+
+                        fieldValues(first: 100) {
+                          nodes {
+                            ... on ProjectV2ItemFieldNumberValue {
+                              number
+                              field {
+                                ... on ProjectV2Field {
+                                  id
+                                  name
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            // Retrieve all project items
+            let allItems = [];
+            let project = null;
+            let after = null;
+
+            while (true) {
+              const result = await graphql(query, { after });
+
+              const currentProject =
+                result.user?.projectV2;
+
+              if (!currentProject) {
+                throw new Error('Project not found.');
+              }
+
+              if (!project) {
+                project = currentProject;
+              }
+
+              allItems.push(
+                ...currentProject.items.nodes
+              );
+
+              const pageInfo =
+                currentProject.items.pageInfo;
+
+              if (!pageInfo.hasNextPage) {
+                break;
+              }
+
+              after = pageInfo.endCursor;
+            }
+
+            // Find the Estimate/Effort field
+            const effortField = project.fields.nodes.find(
+              field =>
+                field.name.toLowerCase() ===
+                effortFieldName.toLowerCase()
+            );
+
+            if (!effortField) {
+              throw new Error(
+                `Field "${effortFieldName}" not found.`
+              );
+            }
+
+            if (effortField.dataType !== 'NUMBER') {
+              throw new Error(
+                'Effort field must be a Number field.'
+              );
+            }
+
+            // Map issue IDs to project items
+            const issueItems = new Map();
+
+            for (const item of allItems) {
+              if (item.content?.__typename === 'Issue') {
+                issueItems.set(
+                  item.content.id,
+                  item
+                );
+              }
+            }
+
+            // Read the Estimate value of an item
+            function getEffort(item) {
+              const value = item.fieldValues.nodes.find(
+                fieldValue =>
+                  fieldValue.field?.id === effortField.id
+              );
+
+              return value?.number ?? 0;
+            }
+
+            let updatedCount = 0;
+
+            // Calculate the total for every parent issue
+            for (const parentItem of allItems) {
+              const parent = parentItem.content;
+
+              if (
+                parent?.__typename !== 'Issue' ||
+                parent.subIssues.nodes.length === 0
+              ) {
+                continue;
+              }
+
+              let totalEffort = 0;
+              let missingTasks = [];
+
+              for (const subIssue of parent.subIssues.nodes) {
+                const childItem = issueItems.get(
+                  subIssue.id
+                );
+
+                if (!childItem) {
+                  missingTasks.push(subIssue.number);
+                  continue;
+                }
+
+                totalEffort += getEffort(childItem);
+              }
+
+              // Do not update an incomplete total
+              if (missingTasks.length > 0) {
+                core.warning(
+                  `Story #${parent.number}: ` +
+                  `Sub-issues not in project: ` +
+                  missingTasks.join(', ')
+                );
+                continue;
+              }
+
+              const currentEffort =
+                getEffort(parentItem);
+
+              if (
+                Math.abs(currentEffort - totalEffort) < 0.000001
+              ) {
+                core.info(
+                  `Story #${parent.number}: ` +
+                  `Already up to date (${totalEffort})`
+                );
+                continue;
+              }
+
+              // Update parent User Story
+              const mutation = `
+                mutation(
+                  $projectId: ID!,
+                  $itemId: ID!,
+                  $fieldId: ID!,
+                  $total: Float!
+                ) {
+                  updateProjectV2ItemFieldValue(
+                    input: {
+                      projectId: $projectId
+                      itemId: $itemId
+                      fieldId: $fieldId
+                      value: {
+                        number: $total
+                      }
+                    }
+                  ) {
+                    projectV2Item {
+                      id
+                    }
+                  }
+                }
+              `;
+
+              await graphql(mutation, {
+                projectId: project.id,
+                itemId: parentItem.id,
+                fieldId: effortField.id,
+                total: totalEffort
+              });
+
+              updatedCount++;
+
+              core.info(
+                `Updated Story #${parent.number}: ` +
+                `${currentEffort} -> ${totalEffort}`
+              );
+            }
+
+            core.info(
+              `Completed. Parent stories updated: ${updatedCount}`
+            );
